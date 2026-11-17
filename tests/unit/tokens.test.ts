@@ -18,7 +18,7 @@ describe("curated token list", () => {
 
   // Chains where only the native coin is scanned until token addresses are
   // verified on-chain. Every other chain must have curated tokens.
-  const NATIVE_ONLY = new Set([204]);
+  const NATIVE_ONLY = new Set<number>([]);
 
   it("covers every scanned chain, with no duplicates per chain", () => {
     for (const chain of SCAN_CHAINS) {
