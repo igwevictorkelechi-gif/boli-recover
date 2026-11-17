@@ -1,59 +1,57 @@
-import { isAddress, getAddress } from "viem";
-import { verifySignature } from "@/lib/ownership";
+import { isAddress, getAddress, isHex } from "viem";
+import {
+  buildChallengeMessage,
+  readChallenge,
+  verifySignature,
+} from "@/lib/ownership";
+import { consumeNonce } from "@/lib/nonceStore";
 import { issueSession } from "@/lib/session";
-import { supabaseAdmin } from "@/lib/supabaseServer";
+import { rateLimit } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 
+// Checks the wallet's signature over the challenge message. On success the
+// challenge is consumed (single use) and a 15-minute session token is issued;
+// /api/transfer requires it before building any transaction.
 export async function POST(req: Request) {
-  let body: { address?: string; signature?: string };
+  const limited = rateLimit(req, "verify", 20, 60_000);
+  if (limited) return limited;
+
+  let body: { address?: string; signature?: string; challenge?: string };
   try {
     body = await req.json();
   } catch {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { address, signature } = body;
-  if (!address || !isAddress(address) || !signature) {
+  const { address, signature, challenge } = body;
+  if (
+    !address ||
+    !isAddress(address) ||
+    !signature ||
+    !isHex(signature) ||
+    !challenge
+  ) {
     return Response.json(
-      { error: "Missing address or signature" },
+      { verified: false, error: "Missing address, signature or challenge" },
       { status: 400 },
     );
   }
-
   const addr = getAddress(address);
 
   try {
-    const sb = supabaseAdmin();
-
-    // Most recent still-valid, unverified challenge for this address.
-    const { data, error } = await sb
-      .from("ownership_challenges")
-      .select("*")
-      .eq("address", addr.toLowerCase())
-      .is("verified_at", null)
-      .gt("expires_at", new Date().toISOString())
-      .order("created_at", { ascending: false })
-      .limit(1);
-
-    if (error) {
-      return Response.json({ error: error.message }, { status: 500 });
-    }
-
-    const row = data?.[0];
-    if (!row) {
+    const check = readChallenge(challenge, addr);
+    if (!check.ok) {
       return Response.json(
-        { verified: false, error: "No active challenge. Request a new one." },
+        { verified: false, error: check.reason },
         { status: 400 },
       );
     }
 
-    const ok = await verifySignature({
-      message: row.message as string,
-      signature: signature as `0x${string}`,
-      address: addr,
-    });
-
+    // Rebuild the message from the signed challenge — never trust a message
+    // sent by the client.
+    const message = buildChallengeMessage(check.challenge);
+    const ok = await verifySignature({ message, signature, address: addr });
     if (!ok) {
       return Response.json(
         { verified: false, error: "Signature does not match this address" },
@@ -61,35 +59,27 @@ export async function POST(req: Request) {
       );
     }
 
-    // Sign the session first: if SESSION_SECRET is misconfigured this throws
-    // before the challenge is consumed, so the user can retry the same one.
-    // A short-lived signed token (HS256 JWT, 15 min) that /api/transfer
-    // requires before building a transaction for this address. Not stored —
-    // the signature on it is the proof.
-    const { token, expiresAt } = issueSession(addr);
+    // Sign the session before consuming, so a misconfigured secret doesn't
+    // burn the user's challenge.
+    const session = issueSession(addr);
 
-    // Consume the challenge. The `verified_at is null` filter makes this
-    // single-use: if two requests race with the same signature, only one
-    // update matches a row, and only that one gets a session.
-    const { data: consumed, error: updError } = await sb
-      .from("ownership_challenges")
-      .update({ verified_at: new Date().toISOString() })
-      .eq("id", row.id)
-      .is("verified_at", null)
-      .select("id");
-    if (updError) {
-      return Response.json({ error: updError.message }, { status: 500 });
-    }
-    if (!consumed || consumed.length === 0) {
+    const fresh = await consumeNonce({
+      nonce: check.challenge.nonce,
+      address: addr,
+      message,
+      issuedAt: check.challenge.issuedAt,
+      expiresAt: check.challenge.expiresAt,
+    });
+    if (!fresh) {
       return Response.json(
-        { verified: false, error: "Challenge already used. Request a new one." },
+        { verified: false, error: "Challenge already used. Start again." },
         { status: 409 },
       );
     }
 
-    return Response.json({ verified: true, token, expiresAt });
+    return Response.json({ verified: true, ...session });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Verification failed";
-    return Response.json({ error: message }, { status: 500 });
+    return Response.json({ verified: false, error: message }, { status: 500 });
   }
 }

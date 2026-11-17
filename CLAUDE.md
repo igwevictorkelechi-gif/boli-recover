@@ -36,92 +36,81 @@ If a request would cross these lines, stop and flag it rather than implementing.
 ```
 src/
   lib/
-    chains.ts        supported EVM chains (viem) + per-chain RPC override
-    tokens.ts        curated token fallback list (no-API-key path)
+    rpcs.ts          public RPC fallback list (shared by server + browser)
+    chains.ts        supported chains, fallback transports, RPC_<id> overrides
+    tokens.ts        curated token list (checksums guarded by tests)
     indexer.ts       Alchemy Token API — full ERC-20 coverage when keyed
-    spam.ts          heuristic spam-token flags (links/lure words in metadata)
-    scan.ts          orchestrates native + token scan per chain
-    ownership.ts     challenge message builder + viem signature recovery
-    session.ts       HS256 session token: issued on verify, required to move
-    transfer.ts      builds an unsigned transfer + gas/fee + shortfall check
-    supabaseServer.ts service-role Supabase client (server-only)
+    spam.ts          heuristic spam-token flags
+    scan.ts          native + token scan per chain, per-chain status/timeout
+    secret.ts        purpose-separated HMAC keys derived from SESSION_SECRET
+    ownership.ts     stateless signed challenge + signature recovery
+    nonceStore.ts    single-use challenges (Supabase, else in-memory)
+    session.ts       15-min HS256 session: issued on verify, required to move
+    transfer.ts      builds unsigned transfer, worst-case fee, gas shortfall
+    planCheck.ts     client-safe: verify server tx == user intent; formatting
+    rateLimit.ts     per-IP fixed-window limiter (in-memory)
+    supabaseServer.ts optional service-role client (server-only)
   app/
-    api/scan/        POST: read-only multi-chain balance scan
-    api/challenge/   POST: issue an ownership nonce (stored in Supabase)
-    api/verify/      POST: recover signer, consume challenge, issue session
-    api/transfer/    POST: (session required) build tx, estimate fee, gas check
-    page.tsx         orchestrates ScanForm -> ResultsTable -> VerifyAndMove
-    providers.tsx    wagmi + react-query providers
+    api/scan|challenge|verify|transfer|health
+    page.tsx         scan -> results -> move panel, how-it-works, FAQ
+    error.tsx        crash screen (reassures nothing moved)
   components/
-    ScanForm.tsx       address input -> /api/scan
-    ResultsTable.tsx   per-chain balances, "Move this" select, spam hidden
-    VerifyAndMove.tsx  connect -> prove ownership -> review -> (fund gas) -> send
-  wagmi.ts           client wagmi config (injected connector)
-supabase/migrations/ ownership_challenges table + RLS
+    Wallet.tsx         wallet picker (EIP-6963) + header button
+    ScanForm.tsx       address input, "scan my connected wallet"
+    ResultsTable.tsx   found / couldn't-check / empty chains, spam toggle
+    VerifyAndMove.tsx  connect -> prove -> review -> (fund gas) -> confirm -> send
+    Info.tsx           how it works + FAQ (static)
+tests/unit, tests/integration (ganache in-process, real route handlers)
+supabase/migrations/ optional; 0002 makes nonces unique
 ```
 
-Data flow: scan is server-side over public RPCs / Alchemy. Ownership
-verification is server-side (viem `recoverMessageAddress`); success consumes
-the challenge (single use) and returns a 15-minute HS256 session token for that
-address. `/api/transfer` refuses to build anything without a valid token for
-the **same** address the funds move from. It returns an unsigned transaction,
-the worst-case network fee, and any gas shortfall. The client re-checks that the
-transaction matches what the user typed (network, asset, destination, amount)
-before handing it to the wallet, and the wallet signs and sends it. The backend
+Flow: `/api/scan` is read-only and returns all 7 chains, each with assets
+and/or an `error` — never present "couldn't check" as "empty". `/api/challenge`
+returns a message plus a server-signed challenge token; `/api/verify` rebuilds
+the message from the token (never trusts a client-sent message), recovers the
+signer, consumes the nonce, and returns a session. `/api/transfer` requires the
+session for the same address, reads live balances, estimates gas (+ OP-stack L1
+fee), and returns an unsigned tx with exact fee caps and any shortfall. The
+browser runs `planMismatch` before handing the tx to the wallet. The backend
 never holds keys or sends value.
-
-Gas: the plan's fee is `gas limit × maxFeePerGas` (+ the L1 data fee on
-Optimism/Base, with headroom), and those exact fee caps are passed to the
-wallet, so a "Max" native send can't be pushed over the balance. When the
-address can't cover the fee, the UI shows exactly how much native coin to send,
-to which address, on which network, and a Re-check button.
 
 ## Commands
 
 ```bash
 npm install
-npm run dev        # http://localhost:3000
-npm run typecheck  # tsc --noEmit  (run before committing)
+npm run dev        # http://localhost:3000  (needs SESSION_SECRET in .env.local)
+npm test           # vitest: unit + integration (local chain, no network)
+npm run typecheck  # run before committing
+npm run lint
 npm run build
 ```
 
 ## Environment
 
-Copy `.env.example` to `.env.local`:
-
-- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` — server-only; the service-role
-  key must never reach the browser.
-- `SESSION_SECRET` — server-only, ≥32 random chars; signs the ownership session
-  token. Without it, verification and the move step fail with a 500.
-- `ALCHEMY_API_KEY` — enables full ERC-20 scanning; without it, curated tokens
-  only.
-- `RPC_<chainId>` — optional public-RPC overrides.
-
-Apply `supabase/migrations/0001_ownership_challenges.sql` to the Supabase
-project before using the ownership flow.
+Only `SESSION_SECRET` (≥32 chars) is required. Optional: `ALCHEMY_API_KEY`,
+`RPC_<chainId>` (comma list), `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`,
+`TOKENS_<chainId>`. `/api/health` reports what's set (never values).
 
 ## Conventions
 
 - TypeScript strict. viem for all chain/crypto; wagmi v2 for wallet hooks.
-- Balances cross the API as base-unit **integer strings** (`raw`), not numbers —
-  never parse on-chain amounts into JS floats.
-- API routes validate addresses with `isAddress` and checksum with `getAddress`.
-- Scans fail soft: an RPC/indexer error on one chain skips that chain rather
-  than failing the whole scan.
-- Spam tokens are flagged, not dropped, and are never offered a "Move" button.
-  Keep `spam.ts` rules narrow — a false positive hides someone's real funds.
-- Import wallet connectors from `wagmi` (root), not the `wagmi/connectors`
-  barrel: the barrel pulls in the Coinbase/Base SDK, whose optional x402
-  packages aren't installed and break `next build`.
+- Balances cross the API as base-unit **integer strings** (`raw`), never JS
+  floats. Display with `displayAmount` (truncates, never rounds up).
+- Validate addresses with viem's strict `isAddress`: all-lowercase or a valid
+  checksum. A mixed-case address with a bad checksum is a likely typo — reject.
+- Scans fail soft per chain, and say so (`error`).
+- A multicall where every call fails is treated as "multicall unavailable",
+  not "zero balance" (falls back to individual reads).
+- Spam tokens are flagged, never moved. Keep `spam.ts` narrow.
+- Import connectors from `wagmi` root, not the `wagmi/connectors` barrel (it
+  pulls in the Coinbase SDK whose optional x402 deps break `next build`).
+- New HMAC uses get their own `Purpose` in `secret.ts`.
 
 ## Next up (not yet built)
 
-1. **Sponsored gas** — today the gas path tells the user exactly what to send
-   and re-checks. A smoother path is paying the fee for them (ERC-4337 paymaster
-   or EIP-7702), which needs a funded relayer and abuse limits.
-2. **Better spam data** — `spam.ts` is heuristic. Swap in a provider's spam
-   list (or a maintained token list as an allow-list) if false negatives show.
-3. **Rate limiting** on `/api/challenge` and `/api/scan`.
-4. **Drop `ownership_challenges.session_token`** — no longer written (the
-   session is a signed token, not stored). Needs a migration.
+1. **Sponsored gas** (ERC-4337 paymaster / EIP-7702) so users needn't top up.
+2. **WalletConnect** for mobile browsers outside wallet apps (needs a project
+   id; import the connector directly, keep `next build` green).
+3. **Shared rate limiting** (e.g. Upstash) for multi-instance deploys.
+4. **Better spam data** — a provider spam list or token-list allow-list.
 5. **Non-EVM** — Solana / Bitcoin / Tron need separate address + signing paths.

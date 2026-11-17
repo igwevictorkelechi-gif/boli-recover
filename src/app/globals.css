@@ -73,6 +73,15 @@ input:focus {
   border-color: var(--accent);
 }
 
+/* Keyboard focus must stay visible on every control. */
+button:focus-visible,
+summary:focus-visible,
+a:focus-visible,
+input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 button {
   padding: 11px 16px;
   border: none;
@@ -253,4 +262,223 @@ a {
 
 .asset.spam {
   opacity: 0.6;
+}
+
+/* --- MVP layout additions ------------------------------------------------ */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+
+.topbar-inner {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.wallet-slot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-height: 38px;
+}
+
+.wallet-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wallet-choices.compact button {
+  padding: 8px 12px;
+}
+
+.wallet-choices button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wallet-icon {
+  border-radius: 4px;
+}
+
+.wallet-missing {
+  border: 1px solid var(--warn);
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 14px;
+}
+
+.wallet-missing p {
+  margin: 0;
+}
+
+button.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: underline;
+  display: inline-block;
+}
+
+button.link:hover {
+  color: var(--text);
+}
+
+h2 {
+  font-size: 17px;
+  margin: 0 0 10px;
+}
+
+.steps {
+  display: flex;
+  gap: 6px;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 10px;
+  counter-reset: step;
+  flex-wrap: wrap;
+}
+
+.steps li {
+  counter-increment: step;
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+.steps li::before {
+  content: counter(step) ". ";
+}
+
+.steps li.active {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.steps li.done {
+  color: var(--good);
+  border-color: var(--good);
+}
+
+.steps li.done::before {
+  content: "✓ ";
+}
+
+.callout {
+  border: 1px solid var(--warn);
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 14px;
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 14px 0 12px;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.check input {
+  margin-top: 3px;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.asset.selected {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  margin: 0 -8px;
+  padding-left: 8px;
+  padding-right: 8px;
+  border-radius: 6px;
+}
+
+.asset-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding-right: 10px;
+}
+
+.chain-card.failed {
+  border-color: var(--warn);
+  font-size: 14px;
+}
+
+.info {
+  margin-top: 28px;
+}
+
+.how {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 14px;
+}
+
+.how li {
+  margin-bottom: 8px;
+}
+
+details {
+  border-top: 1px solid var(--border);
+  padding: 10px 0;
+  font-size: 14px;
+}
+
+details:first-of-type {
+  border-top: none;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+details p {
+  color: var(--muted);
+  margin: 8px 0 0;
+}
+
+.footer {
+  margin-top: 24px;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+}
+
+@media (max-width: 520px) {
+  .container {
+    padding: 20px 16px 60px;
+  }
+  .topbar-inner {
+    padding: 8px 16px;
+  }
+  h1 {
+    font-size: 20px;
+  }
 }

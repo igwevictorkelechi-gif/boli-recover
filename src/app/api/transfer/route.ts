@@ -1,5 +1,6 @@
 import { getAddress, isAddress } from "viem";
 import { bearerToken, verifySession } from "@/lib/session";
+import { rateLimit } from "@/lib/rateLimit";
 import {
   buildTransfer,
   TransferError,
@@ -15,6 +16,9 @@ export const maxDuration = 30;
 // and that token must be for the same address the funds are moving from. The
 // returned transaction is signed in the user's own wallet.
 export async function POST(req: Request) {
+  const limited = rateLimit(req, "transfer", 30, 60_000);
+  if (limited) return limited;
+
   let sessionOwner;
   try {
     sessionOwner = verifySession(bearerToken(req));
@@ -62,7 +66,7 @@ export async function POST(req: Request) {
   if (typeof chainId !== "number") {
     return Response.json({ error: "Missing chainId" }, { status: 400 });
   }
-  if (!to || !isAddress(to)) {
+  if (!to || !isAddress(to.trim())) {
     return Response.json(
       { error: "Enter a valid destination address." },
       { status: 400 },
@@ -80,7 +84,10 @@ export async function POST(req: Request) {
     asset.address &&
     isAddress(asset.address)
   ) {
-    parsedAsset = { kind: "token", address: getAddress(asset.address) };
+    parsedAsset = {
+      kind: "token",
+      address: getAddress(asset.address),
+    };
   } else {
     return Response.json({ error: "Invalid asset" }, { status: 400 });
   }
@@ -90,7 +97,7 @@ export async function POST(req: Request) {
       owner: sessionOwner,
       chainId,
       asset: parsedAsset,
-      to: getAddress(to),
+      to: getAddress(to.trim()),
       amount,
     });
     return Response.json(plan);

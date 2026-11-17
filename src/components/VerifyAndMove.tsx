@@ -3,7 +3,7 @@
 import { useState } from "react";
 import {
   useAccount,
-  useConnect,
+  useDisconnect,
   useSignMessage,
   useSwitchChain,
   useChainId,
@@ -11,9 +11,6 @@ import {
   useWaitForTransactionReceipt,
 } from "wagmi";
 import {
-  decodeFunctionData,
-  erc20Abi,
-  formatUnits,
   getAddress,
   isAddress,
   parseUnits,
@@ -22,74 +19,46 @@ import {
 } from "viem";
 import type { Selection } from "./ResultsTable";
 import type { TransferPlan } from "@/lib/transfer";
+import {
+  displayAmount,
+  planMismatch,
+  roundUpForHumans,
+  shortAddress,
+} from "@/lib/planCheck";
+import { addressError } from "./ScanForm";
+import { ConnectChoices } from "./Wallet";
 import { config } from "@/wagmi";
 
 type SupportedChainId = (typeof config)["chains"][number]["id"];
-
 type Session = { token: string; expiresAt: string };
 
+function chainMeta(chainId: number) {
+  return config.chains.find((c) => c.id === chainId);
+}
+
 function explorerTxUrl(chainId: number, hash: string): string | null {
-  const chain = config.chains.find((c) => c.id === chainId);
-  const base = chain?.blockExplorers?.default.url;
+  const base = chainMeta(chainId)?.blockExplorers?.default.url;
   return base ? `${base}/tx/${hash}` : null;
 }
 
-// "Send at least 0.000069929725864464 ETH" is hard to act on. Round the
-// shortfall UP to two significant figures (0.00007) so following the
-// instruction always covers it.
-function roundUpForHumans(raw: string, decimals: number): string {
-  const v = BigInt(raw);
-  if (v <= 0n) return "0";
-  const digits = v.toString().length;
-  if (digits <= 2) return formatUnits(v, decimals);
-  const unit = 10n ** BigInt(digits - 2);
-  const rounded = ((v + unit - 1n) / unit) * unit;
-  return formatUnits(rounded, decimals);
-}
-
-// Defence in depth: the server builds the transaction, but before the wallet
-// is asked to sign it we check it does exactly what the user typed — right
-// network, right asset, right destination, right amount. A tampered or buggy
-// response is refused instead of signed.
-function planMismatch(
-  plan: TransferPlan,
-  o: {
-    owner: Address;
-    selection: Selection;
-    destination: Address;
-    requested: bigint | "max";
-  },
-): string | null {
-  if (plan.chainId !== o.selection.chainId) return "network";
-  if (getAddress(plan.from) !== o.owner) return "sender";
-  const value = BigInt(plan.tx.value);
-  const { asset } = o.selection;
-
-  if (asset.kind === "native") {
-    if (plan.tx.data && plan.tx.data !== "0x") return "call data";
-    if (getAddress(plan.tx.to) !== o.destination) return "destination";
-    if (o.requested !== "max" && value !== o.requested) return "amount";
-    return null;
+// Wallet and RPC errors are long and technical; say what happened plainly.
+function friendlyError(e: unknown, fallback: string): string {
+  const msg =
+    (e as { shortMessage?: string })?.shortMessage ??
+    (e instanceof Error ? e.message : "");
+  if (/user (rejected|denied)|rejected the request|denied/i.test(msg)) {
+    return "You declined in your wallet. Nothing was sent.";
   }
-
-  if (value !== 0n) return "value";
-  if (!asset.address || getAddress(plan.tx.to) !== getAddress(asset.address)) {
-    return "token contract";
+  if (/insufficient funds/i.test(msg)) {
+    return "Not enough of this network's coin to pay the fee. Press Re-check for the exact amount needed.";
   }
-  try {
-    const call = decodeFunctionData({
-      abi: erc20Abi,
-      data: plan.tx.data as Hex,
-    });
-    if (call.functionName !== "transfer") return "function";
-    const [to, amount] = call.args as readonly [Address, bigint];
-    if (getAddress(to) !== o.destination) return "destination";
-    if (amount.toString() !== plan.amount.raw) return "amount";
-    if (o.requested !== "max" && amount !== o.requested) return "amount";
-  } catch {
-    return "call data";
+  if (
+    /chain|network/i.test(msg) &&
+    /switch|unrecognized|unsupported/i.test(msg)
+  ) {
+    return "Your wallet couldn't switch networks. Switch it manually, then try again.";
   }
-  return null;
+  return msg ? msg.split("\n")[0] : fallback;
 }
 
 // Shown when the address can't pay the network fee: exactly how much native
@@ -105,9 +74,7 @@ function GasHelp({
   owner: Address;
 }) {
   const [copied, setCopied] = useState(false);
-  const decimals =
-    config.chains.find((c) => c.id === plan.chainId)?.nativeCurrency.decimals ??
-    18;
+  const decimals = chainMeta(plan.chainId)?.nativeCurrency.decimals ?? 18;
   const need = roundUpForHumans(shortfall.raw, decimals);
 
   async function copyOwner() {
@@ -147,7 +114,7 @@ function GasHelp({
           the {plan.chainName} network when withdrawing; from another wallet,
           switch it to {plan.chainName} first.
         </li>
-        <li>Once it arrives, press Re-check above.</li>
+        <li>Once it arrives (usually under a minute), press Re-check.</li>
       </ol>
     </div>
   );
@@ -156,20 +123,22 @@ function GasHelp({
 export function VerifyAndMove({
   ownerAddress,
   selection,
+  onMoved,
 }: {
   ownerAddress: string;
   selection: Selection;
+  onMoved: () => void;
 }) {
   const owner = getAddress(ownerAddress as Address);
   const { address: connected, isConnected } = useAccount();
-  const { connect, connectors, isPending: connecting } = useConnect();
+  const { disconnect } = useDisconnect();
   const { signMessageAsync } = useSignMessage();
   const { switchChainAsync } = useSwitchChain();
   const activeChainId = useChainId();
   const { sendTransactionAsync } = useSendTransaction();
 
   const [session, setSession] = useState<Session | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<null | "verify" | "review" | "send">(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<Hex | null>(null);
@@ -178,6 +147,7 @@ export function VerifyAndMove({
   const [amount, setAmount] = useState("");
   const [useMax, setUseMax] = useState(true);
   const [plan, setPlan] = useState<TransferPlan | null>(null);
+  const [confirmedNetwork, setConfirmedNetwork] = useState(false);
 
   const receipt = useWaitForTransactionReceipt({
     hash: txHash ?? undefined,
@@ -186,65 +156,78 @@ export function VerifyAndMove({
 
   const a = selection.asset;
   const sameWallet =
-    isConnected && connected && getAddress(connected) === owner;
+    isConnected && !!connected && getAddress(connected) === owner;
   const verified =
     session !== null && new Date(session.expiresAt).getTime() > Date.now();
 
   function resetPlan() {
     setPlan(null);
     setStatus(null);
+    setConfirmedNetwork(false);
   }
 
   async function proveOwnership() {
     setError(null);
-    setBusy(true);
+    setStatus(null);
+    setBusy("verify");
     try {
       const chRes = await fetch("/api/challenge", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ address: owner }),
       });
-      const chData = await chRes.json();
+      const ch = await chRes.json().catch(() => ({}));
       if (!chRes.ok)
-        throw new Error(chData.error ?? "Could not start verification");
+        throw new Error(ch.error ?? "Could not start verification");
 
-      const signature = await signMessageAsync({ message: chData.message });
+      const signature = await signMessageAsync({ message: ch.message });
 
       const vRes = await fetch("/api/verify", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ address: owner, signature }),
+        body: JSON.stringify({
+          address: owner,
+          signature,
+          challenge: ch.challenge,
+        }),
       });
-      const vData = await vRes.json();
-      if (!vRes.ok || !vData.verified) {
-        throw new Error(vData.error ?? "Verification failed");
+      const v = await vRes.json().catch(() => ({}));
+      if (!vRes.ok || !v.verified) {
+        throw new Error(v.error ?? "Verification failed");
       }
-      setSession({ token: vData.token, expiresAt: vData.expiresAt });
-      setStatus("Ownership verified. Enter where the funds should go.");
+      setSession({ token: v.token, expiresAt: v.expiresAt });
+      setStatus("Ownership verified. Now choose where the funds should go.");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Verification failed");
+      setError(friendlyError(e, "Verification failed"));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
   // Parse what the user asked for. Returns null (and sets an error) if invalid.
   function readInputs(): { to: Address; requested: bigint | "max" } | null {
     const dest = destination.trim();
-    if (!isAddress(dest)) {
-      setError("Enter a valid destination address.");
+    const bad = dest ? addressError(dest) : "Enter a destination address.";
+    if (bad) {
+      setError(bad);
       return null;
     }
     if (useMax) return { to: getAddress(dest), requested: "max" };
     let value: bigint;
     try {
-      value = parseUnits(amount.trim(), a.decimals);
+      value = parseUnits(amount.trim().replace(/,/g, ""), a.decimals);
     } catch {
-      setError("Invalid amount.");
+      setError("Enter the amount as a number, e.g. 12.5");
       return null;
     }
     if (value <= 0n) {
       setError("Amount must be greater than zero.");
+      return null;
+    }
+    if (value > BigInt(a.raw)) {
+      setError(
+        `That's more than the ${displayAmount(a.formatted)} ${a.symbol} available.`,
+      );
       return null;
     }
     return { to: getAddress(dest), requested: value };
@@ -254,10 +237,16 @@ export function VerifyAndMove({
     setError(null);
     setStatus(null);
     setPlan(null);
+    setConfirmedNetwork(false);
     const input = readInputs();
-    if (!input || !session) return;
+    if (!input) return;
+    if (!verified || !session) {
+      setSession(null);
+      setError("Your ownership check expired. Prove ownership again.");
+      return;
+    }
 
-    setBusy(true);
+    setBusy("review");
     try {
       const res = await fetch("/api/transfer", {
         method: "POST",
@@ -277,7 +266,7 @@ export function VerifyAndMove({
             input.requested === "max" ? "max" : input.requested.toString(),
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         if (data.reverify) setSession(null);
         throw new Error(data.error ?? "Could not prepare the transfer");
@@ -285,9 +274,13 @@ export function VerifyAndMove({
       const p = data as TransferPlan;
       const bad = planMismatch(p, {
         owner,
-        selection,
+        chainId: selection.chainId,
+        asset:
+          a.kind === "native"
+            ? { kind: "native" }
+            : { kind: "token", address: a.address as Address },
         destination: input.to,
-        ...input,
+        requested: input.requested,
       });
       if (bad) {
         throw new Error(
@@ -296,22 +289,20 @@ export function VerifyAndMove({
       }
       setPlan(p);
     } catch (e) {
-      setError(
-        e instanceof Error ? e.message : "Could not prepare the transfer",
-      );
+      setError(friendlyError(e, "Could not prepare the transfer"));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
   async function send() {
-    if (!plan || plan.shortfall) return;
+    if (!plan || plan.shortfall || !confirmedNetwork) return;
     setError(null);
     setTxHash(null);
-    setBusy(true);
+    setBusy("send");
     try {
       if (activeChainId !== plan.chainId) {
-        setStatus(`Switching wallet to ${plan.chainName}…`);
+        setStatus(`Switching your wallet to ${plan.chainName}…`);
         await switchChainAsync({ chainId: plan.chainId as SupportedChainId });
       }
       setStatus("Confirm the transaction in your wallet…");
@@ -336,57 +327,77 @@ export function VerifyAndMove({
             gasPrice: plan.tx.gasPrice ? BigInt(plan.tx.gasPrice) : undefined,
           });
       setTxHash(hash);
-      setStatus("Transaction submitted. Waiting for it to confirm…");
+      setStatus(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Transaction failed");
+      setError(friendlyError(e, "Transaction failed"));
       setStatus(null);
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
   const explorer = txHash ? explorerTxUrl(selection.chainId, txHash) : null;
+  const destPretty = isAddress(destination.trim())
+    ? getAddress(destination.trim())
+    : destination.trim();
 
   return (
-    <div className="panel">
+    <div className="panel" id="move">
       <h3 style={{ marginTop: 0 }}>
-        Move {a.formatted} {a.symbol} on {selection.chainName}
+        Move {displayAmount(a.formatted)} {a.symbol} on {selection.chainName}
       </h3>
+      <ol className="steps">
+        <li className={sameWallet ? "done" : "active"}>Connect</li>
+        <li className={verified ? "done" : sameWallet ? "active" : ""}>
+          Prove ownership
+        </li>
+        <li className={txHash ? "done" : verified ? "active" : ""}>
+          Review &amp; send
+        </li>
+      </ol>
       <p className="note">
-        Owner address: <span className="mono">{owner}</span>
+        From: <span className="mono">{owner}</span>
       </p>
 
       {/* Step 1: connect the owning wallet */}
       {!isConnected && (
         <>
-          <button
-            onClick={() => connect({ connector: connectors[0] })}
-            disabled={connecting || !connectors[0]}
-          >
-            {connecting ? "Connecting…" : "Connect wallet"}
-          </button>
-          <p className="note">
-            Connect the wallet that controls the owner address above.
-          </p>
+          <p>Connect the wallet that controls this address.</p>
+          <ConnectChoices />
         </>
       )}
 
       {isConnected && !sameWallet && (
-        <p className="error">
-          Connected wallet ({connected}) is not the owner address. Switch to the
-          wallet that controls {owner}.
-        </p>
+        <div className="callout">
+          <p style={{ marginTop: 0 }}>
+            Your wallet is connected as{" "}
+            <span className="mono">{connected && shortAddress(connected)}</span>
+            , but the funds are at{" "}
+            <span className="mono">{shortAddress(owner)}</span>.
+          </p>
+          <p className="note">
+            Switch to that account inside your wallet — this page updates
+            automatically. If it&apos;s in a different wallet app, disconnect
+            and connect that one.
+          </p>
+          <button className="secondary" onClick={() => disconnect()}>
+            Disconnect
+          </button>
+        </div>
       )}
 
       {/* Step 2: prove ownership */}
       {sameWallet && !verified && (
         <>
-          <button onClick={proveOwnership} disabled={busy}>
-            {busy ? "Waiting for signature…" : "Prove ownership (free, no gas)"}
+          <button onClick={proveOwnership} disabled={busy !== null}>
+            {busy === "verify"
+              ? "Check your wallet…"
+              : "Prove ownership (free, no gas)"}
           </button>
           <p className="note">
-            You&apos;ll sign a message. It moves nothing and costs nothing — it
-            just proves you hold the key.
+            Your wallet will ask you to sign a message. It moves nothing and
+            costs nothing — it only proves you hold the key. Never sign anything
+            here that your wallet shows as a transaction or an approval.
           </p>
         </>
       )}
@@ -394,10 +405,12 @@ export function VerifyAndMove({
       {/* Step 3: say where it goes, then review */}
       {sameWallet && verified && !txHash && (
         <>
-          <label htmlFor="dest">Destination address</label>
+          <label htmlFor="dest">Send to</label>
           <input
             id="dest"
             type="text"
+            autoComplete="off"
+            spellCheck={false}
             placeholder="0x… where the funds should go"
             value={destination}
             onChange={(e) => {
@@ -406,11 +419,10 @@ export function VerifyAndMove({
             }}
           />
           <p className="note">
-            Make sure this address accepts {a.symbol} on{" "}
+            The address must accept {a.symbol} on{" "}
             <strong>{selection.chainName}</strong>. If it&apos;s an exchange
-            deposit address, check the exchange supports the{" "}
-            {selection.chainName} network for {a.symbol} — otherwise this
-            happens again.
+            deposit address, check the exchange lists the {selection.chainName}{" "}
+            network for {a.symbol} — otherwise the funds get stuck again.
           </p>
 
           <label htmlFor="amt">Amount ({a.symbol})</label>
@@ -419,8 +431,9 @@ export function VerifyAndMove({
               <input
                 id="amt"
                 type="text"
+                inputMode="decimal"
                 placeholder={useMax ? "" : "0.0"}
-                value={useMax ? `Max (${a.formatted})` : amount}
+                value={useMax ? `All — ${displayAmount(a.formatted)}` : amount}
                 readOnly={useMax}
                 onFocus={() => {
                   if (useMax) {
@@ -450,8 +463,11 @@ export function VerifyAndMove({
             <p className="note">Max sends everything except the network fee.</p>
           )}
           <div className="spacer" />
-          <button onClick={review} disabled={busy || !destination.trim()}>
-            {busy && !plan
+          <button
+            onClick={review}
+            disabled={busy !== null || !destination.trim()}
+          >
+            {busy === "review"
               ? "Checking…"
               : plan
                 ? "Re-check"
@@ -471,27 +487,24 @@ export function VerifyAndMove({
           </div>
           <div className="plan-row">
             <span>To</span>
-            <span className="mono">
-              {isAddress(destination.trim())
-                ? getAddress(destination.trim())
-                : destination.trim()}
-            </span>
+            <span className="mono">{destPretty}</span>
           </div>
           <div className="plan-row">
             <span>Network</span>
             <span>{plan.chainName}</span>
           </div>
           <div className="plan-row">
-            <span>Network fee (up to)</span>
+            <span>Network fee (at most)</span>
             <span className="mono">
-              {plan.fee.formatted} {plan.fee.symbol}
+              {displayAmount(plan.fee.formatted, 8)} {plan.fee.symbol}
               {!plan.fee.estimated && " (approx.)"}
             </span>
           </div>
           <div className="plan-row">
-            <span>Gas balance</span>
+            <span>{plan.fee.symbol} available for fees</span>
             <span className="mono">
-              {plan.nativeBalance.formatted} {plan.nativeBalance.symbol}
+              {displayAmount(plan.nativeBalance.formatted, 8)}{" "}
+              {plan.nativeBalance.symbol}
             </span>
           </div>
 
@@ -505,13 +518,26 @@ export function VerifyAndMove({
             <GasHelp plan={plan} shortfall={plan.shortfall} owner={owner} />
           ) : (
             <>
-              <div className="spacer" />
-              <button onClick={send} disabled={busy}>
-                {busy ? "Working…" : `Send in wallet`}
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={confirmedNetwork}
+                  onChange={(e) => setConfirmedNetwork(e.target.checked)}
+                />
+                <span>
+                  I&apos;ve checked that {shortAddress(destPretty)} accepts{" "}
+                  {plan.amount.symbol} on {plan.chainName}.
+                </span>
+              </label>
+              <button
+                onClick={send}
+                disabled={busy !== null || !confirmedNetwork}
+              >
+                {busy === "send" ? "Check your wallet…" : "Send in wallet"}
               </button>
               <p className="note">
-                Your wallet will show this exact transaction. Check the
-                destination there before confirming.
+                Your wallet shows this exact transaction. Check the destination
+                there before confirming.
               </p>
             </>
           )}
@@ -520,24 +546,32 @@ export function VerifyAndMove({
 
       {txHash && (
         <div className="plan">
-          <p className={receipt.data?.status === "reverted" ? "error" : "ok"}>
+          <p
+            className={receipt.data?.status === "reverted" ? "error" : "ok"}
+            style={{ marginTop: 0 }}
+          >
             {receipt.data?.status === "success"
-              ? "Confirmed. The funds have moved."
+              ? `Done — ${plan?.amount.formatted ?? ""} ${plan?.amount.symbol ?? ""} sent.`
               : receipt.data?.status === "reverted"
-                ? "The transaction was mined but failed. No funds moved; only the fee was spent."
-                : "Submitted. Waiting for confirmation…"}
+                ? "The transaction failed on-chain. Nothing moved; only the fee was spent."
+                : "Sent. Waiting for the network to confirm…"}
           </p>
           <p className="note">
-            Tx: <span className="mono">{txHash}</span>
+            Transaction: <span className="mono">{txHash}</span>
             {explorer && (
               <>
                 {" "}
                 <a href={explorer} target="_blank" rel="noreferrer">
-                  View on explorer
+                  View on explorer ↗
                 </a>
               </>
             )}
           </p>
+          {receipt.data && (
+            <button className="secondary" onClick={onMoved}>
+              Scan again / move something else
+            </button>
+          )}
         </div>
       )}
 

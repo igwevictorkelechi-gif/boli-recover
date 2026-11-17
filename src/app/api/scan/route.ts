@@ -1,5 +1,6 @@
 import { isAddress, getAddress } from "viem";
 import { scanAddress } from "@/lib/scan";
+import { rateLimit } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -7,6 +8,9 @@ export const maxDuration = 30;
 // Read-only. Anyone can scan any address — proving nothing, moving nothing.
 // This is the "show the problem before you commit" step.
 export async function POST(req: Request) {
+  const limited = rateLimit(req, "scan", 10, 60_000);
+  if (limited) return limited;
+
   let body: { address?: string };
   try {
     body = await req.json();
@@ -14,9 +18,12 @@ export async function POST(req: Request) {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { address } = body;
+  const address = body.address?.trim();
   if (!address || !isAddress(address)) {
-    return Response.json({ error: "Enter a valid EVM address" }, { status: 400 });
+    return Response.json(
+      { error: "Enter a valid EVM address (0x…)" },
+      { status: 400 },
+    );
   }
 
   try {

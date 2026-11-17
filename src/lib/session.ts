@@ -1,5 +1,6 @@
-import { createHmac, randomBytes, timingSafeEqual } from "crypto";
+import { randomBytes } from "crypto";
 import { getAddress, isAddress, type Address } from "viem";
+import { hmac, safeEqual } from "./secret";
 
 // Short-lived proof that an address passed the ownership check.
 //
@@ -32,18 +33,8 @@ function b64url(input: string | Buffer): string {
   return Buffer.from(input).toString("base64url");
 }
 
-function secret(): Buffer {
-  const s = process.env.SESSION_SECRET;
-  if (!s || s.length < 32) {
-    throw new Error(
-      "SESSION_SECRET must be set to a random string of at least 32 characters",
-    );
-  }
-  return Buffer.from(s, "utf8");
-}
-
 function sign(data: string): Buffer {
-  return createHmac("sha256", secret()).update(data).digest();
+  return hmac("session", data);
 }
 
 export function issueSession(address: Address): {
@@ -77,9 +68,7 @@ export function verifySession(
 
   const expected = sign(`${header}.${payload}`);
   const given = Buffer.from(sig, "base64url");
-  if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
-    return null;
-  }
+  if (!safeEqual(given, expected)) return null;
 
   let claims: Partial<SessionClaims>;
   try {
