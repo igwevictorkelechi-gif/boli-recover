@@ -1,5 +1,6 @@
 import { formatUnits, getAddress, type Address } from "viem";
 import type { AssetBalance } from "./scan";
+import { checkTokenSpam } from "./spam";
 
 // Full ERC-20 coverage via the Alchemy Token API. Returns every token an
 // address holds on a chain — not just a curated list. When ALCHEMY_API_KEY is
@@ -57,7 +58,11 @@ async function rpcBatch(
 }
 
 type TokenBalanceEntry = { contractAddress: string; tokenBalance: string | null };
-type TokenMetadata = { symbol?: string | null; decimals?: number | null };
+type TokenMetadata = {
+  name?: string | null;
+  symbol?: string | null;
+  decimals?: number | null;
+};
 
 export function alchemySupports(chainId: number): boolean {
   return Boolean(process.env.ALCHEMY_API_KEY) && chainId in ALCHEMY_NETWORKS;
@@ -111,12 +116,17 @@ export async function scanTokensViaAlchemy(
     const assets: AssetBalance[] = [];
     nonZero.forEach((t, i) => {
       const meta = metas[i];
-      // Skip tokens we can't decode (no symbol / decimals) — usually spam.
+      // Skip tokens we can't decode (no symbol / decimals) — usually spam, and
+      // without decimals we can't show an amount anyway.
       if (!meta || meta.decimals == null || !meta.symbol) return;
       const decimals = Number(meta.decimals);
+      const spam = checkTokenSpam(meta);
       assets.push({
         kind: "token",
         symbol: meta.symbol,
+        name: meta.name ?? undefined,
+        spam: spam.spam,
+        spamReason: spam.reason,
         decimals,
         address: getAddress(t.contractAddress),
         raw: t.balance.toString(),

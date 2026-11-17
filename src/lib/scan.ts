@@ -1,21 +1,22 @@
 import {
-  createPublicClient,
-  http,
   formatUnits,
   erc20Abi,
   type Address,
   type Chain,
   type PublicClient,
 } from "viem";
-import { SCAN_CHAINS, rpcUrlFor } from "./chains";
+import { SCAN_CHAINS, clientFor } from "./chains";
 import { CURATED_TOKENS } from "./tokens";
 import { scanTokensViaAlchemy } from "./indexer";
 
 export type AssetBalance = {
   kind: "native" | "token";
   symbol: string;
+  name?: string;
   decimals: number;
   address?: Address; // token contract (absent for native)
+  spam?: boolean; // likely an unsolicited advert token — hidden by default
+  spamReason?: string;
   raw: string; // balance as a base-unit integer string (BigInt-safe over JSON)
   formatted: string; // human-readable
 };
@@ -27,19 +28,6 @@ export type ChainResult = {
   hasGas: boolean; // native balance > 0 — needed to pay for moving tokens out
   assets: AssetBalance[];
 };
-
-const clients = new Map<number, PublicClient>();
-
-function clientFor(chain: Chain): PublicClient {
-  if (!clients.has(chain.id)) {
-    const url = rpcUrlFor(chain.id);
-    clients.set(
-      chain.id,
-      createPublicClient({ chain, transport: http(url) }) as PublicClient,
-    );
-  }
-  return clients.get(chain.id)!;
-}
 
 async function nativeBalance(
   client: PublicClient,

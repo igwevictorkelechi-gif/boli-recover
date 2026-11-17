@@ -1,6 +1,6 @@
-import { randomBytes } from "crypto";
 import { isAddress, getAddress } from "viem";
 import { verifySignature } from "@/lib/ownership";
+import { issueSession } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 
 export const runtime = "nodejs";
@@ -61,16 +61,33 @@ export async function POST(req: Request) {
       );
     }
 
-    const token = randomBytes(32).toString("hex");
-    await sb
-      .from("ownership_challenges")
-      .update({ verified_at: new Date().toISOString(), session_token: token })
-      .eq("id", row.id);
+    // Sign the session first: if SESSION_SECRET is misconfigured this throws
+    // before the challenge is consumed, so the user can retry the same one.
+    // A short-lived signed token (HS256 JWT, 15 min) that /api/transfer
+    // requires before building a transaction for this address. Not stored —
+    // the signature on it is the proof.
+    const { token, expiresAt } = issueSession(addr);
 
-    // The token proves this address passed ownership verification. The move UI
-    // unlocks on it. For production, promote this to a signed JWT with an
-    // expiry and check it in a server-side "build transfer" endpoint.
-    return Response.json({ verified: true, token });
+    // Consume the challenge. The `verified_at is null` filter makes this
+    // single-use: if two requests race with the same signature, only one
+    // update matches a row, and only that one gets a session.
+    const { data: consumed, error: updError } = await sb
+      .from("ownership_challenges")
+      .update({ verified_at: new Date().toISOString() })
+      .eq("id", row.id)
+      .is("verified_at", null)
+      .select("id");
+    if (updError) {
+      return Response.json({ error: updError.message }, { status: 500 });
+    }
+    if (!consumed || consumed.length === 0) {
+      return Response.json(
+        { verified: false, error: "Challenge already used. Request a new one." },
+        { status: 409 },
+      );
+    }
+
+    return Response.json({ verified: true, token, expiresAt });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Verification failed";
     return Response.json({ error: message }, { status: 500 });

@@ -1,4 +1,7 @@
-import { http, createConfig } from "wagmi";
+// `injected` comes from wagmi's root export, not "wagmi/connectors": that
+// barrel also pulls in the Coinbase/Base SDK, whose optional x402 packages
+// aren't installed and break `next build`.
+import { http, createConfig, injected } from "wagmi";
 import {
   mainnet,
   bsc,
@@ -8,11 +11,11 @@ import {
   base,
   avalanche,
 } from "wagmi/chains";
-import { injected } from "wagmi/connectors";
 
 // Client-side wagmi config for connecting a wallet and executing the move.
 // Injected (MetaMask / browser wallets) works with no extra config. To add
-// WalletConnect for mobile wallets, install it and uncomment below.
+// WalletConnect for mobile wallets, install it and import `walletConnect` from
+// "wagmi/connectors" (and check `next build` still passes).
 export const config = createConfig({
   chains: [mainnet, bsc, polygon, arbitrum, optimism, base, avalanche],
   connectors: [

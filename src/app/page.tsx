@@ -38,7 +38,12 @@ export default function Home() {
       )}
 
       {scanned && selection && (
-        <VerifyAndMove ownerAddress={scanned.address} selection={selection} />
+        <VerifyAndMove
+          // Fresh state per asset, so a plan for one asset never carries over.
+          key={`${selection.chainId}-${selection.asset.address ?? "native"}`}
+          ownerAddress={scanned.address}
+          selection={selection}
+        />
       )}
     </main>
   );
