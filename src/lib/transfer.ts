@@ -55,8 +55,12 @@ export type TransferPlan = {
 
 export class TransferError extends Error {}
 
-// Plain native sends to an account with no code always use exactly this much.
+// Plain native sends to an account with no code use exactly this much...
 const NATIVE_TRANSFER_GAS = 21_000n;
+// ...except on chains whose gas units also pay for L1 data. Arbitrum folds
+// the L1 cost into gasUsed, so a plain send needs well over 21000 there and
+// must be estimated. (OP-stack chains bill L1 separately; handled below.)
+const L1_COST_IN_GAS_UNITS = new Set<number>([42161]);
 // Used only if the node refuses to estimate a token transfer.
 const FALLBACK_TOKEN_GAS = 100_000n;
 
@@ -171,7 +175,11 @@ export async function buildTransfer(
   // --- Gas ------------------------------------------------------------------
   let gas: bigint;
   let estimated = true;
-  if (req.asset.kind === "native" && !destIsContract) {
+  if (
+    req.asset.kind === "native" &&
+    !destIsContract &&
+    !L1_COST_IN_GAS_UNITS.has(chain.id)
+  ) {
     gas = NATIVE_TRANSFER_GAS;
   } else {
     try {
@@ -185,9 +193,13 @@ export async function buildTransfer(
         // Some nodes won't simulate for an account with no gas money.
         gas = FALLBACK_TOKEN_GAS;
         estimated = false;
-      } else {
+      } else if (destIsContract) {
         throw new TransferError(
           "The destination contract rejected a test send. It may not accept this asset.",
+        );
+      } else {
+        throw new TransferError(
+          "Couldn't estimate the network fee right now. Try again in a moment.",
         );
       }
     }

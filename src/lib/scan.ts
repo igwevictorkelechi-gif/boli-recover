@@ -113,18 +113,26 @@ async function readBalances(
   }
 }
 
-// symbol + decimals straight from the contract, so a wrong curated entry can
-// never mis-scale an amount. Only called for tokens with a balance.
+// Decimals always come from the contract, so a wrong curated entry can never
+// mis-scale an amount. Only called for tokens with a balance.
+//
+// The label is ours for curated tokens: on-chain symbols are ambiguous
+// (bridged USDC.e on Polygon calls itself "USDC", next to native USDC) or
+// renamed ("USDT0", "USD₮0"). Our vetted label keeps them distinguishable.
+// Tokens added via TOKENS_<chainId> have no label, so they use the chain's.
 async function readMeta(
   client: PublicClient,
   token: TokenInfo,
 ): Promise<{ symbol: string; decimals: number }> {
+  const curatedLabel = token.symbol !== "?" ? token.symbol : null;
   const [sym, dec] = await Promise.allSettled([
-    client.readContract({
-      address: token.address,
-      abi: erc20Abi,
-      functionName: "symbol",
-    }),
+    curatedLabel
+      ? Promise.resolve(curatedLabel)
+      : client.readContract({
+          address: token.address,
+          abi: erc20Abi,
+          functionName: "symbol",
+        }),
     client.readContract({
       address: token.address,
       abi: erc20Abi,
@@ -133,9 +141,7 @@ async function readMeta(
   ]);
   return {
     symbol:
-      sym.status === "fulfilled" && sym.value
-        ? String(sym.value)
-        : token.symbol,
+      sym.status === "fulfilled" && sym.value ? String(sym.value) : "?",
     decimals: dec.status === "fulfilled" ? Number(dec.value) : token.decimals,
   };
 }
