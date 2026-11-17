@@ -13,6 +13,7 @@ import {
   optimism,
   base,
   avalanche,
+  opBNB,
   type Chain,
 } from "viem/chains";
 import { PUBLIC_RPCS } from "./rpcs";
@@ -27,6 +28,7 @@ export const SCAN_CHAINS: Chain[] = [
   optimism,
   base,
   avalanche,
+  opBNB,
 ];
 
 export const CHAIN_BY_ID: Record<number, Chain> = Object.fromEntries(

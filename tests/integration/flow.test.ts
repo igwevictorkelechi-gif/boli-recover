@@ -20,6 +20,7 @@ import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { mainnet } from "viem/chains";
 import { TEST_TOKEN_BYTECODE } from "../fixtures/testToken";
 import { planMismatch } from "@/lib/planCheck";
+import { SCAN_CHAINS } from "@/lib/chains";
 import type { TransferPlan } from "@/lib/transfer";
 import { POST as scanPOST } from "@/app/api/scan/route";
 import { POST as challengePOST } from "@/app/api/challenge/route";
@@ -169,7 +170,7 @@ describe("wrong-network recovery flow", () => {
         formatted: "250",
       }),
     ]);
-    expect(body.results).toHaveLength(7); // every chain reported, ok or not
+    expect(body.results).toHaveLength(SCAN_CHAINS.length); // every chain reported, ok or not
   });
 
   it("rejects malformed and mis-checksummed addresses", async () => {

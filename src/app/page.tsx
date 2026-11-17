@@ -50,7 +50,7 @@ export default function Home() {
       <main className="container">
         <h1>Sent crypto on the wrong network?</h1>
         <p className="sub">
-          On Ethereum, BNB Chain, Polygon, Arbitrum, Optimism, Base and
+          On Ethereum, BNB Chain, opBNB, Polygon, Arbitrum, Optimism, Base and
           Avalanche, your address is the same on every network — and so is your
           key. Funds sent to your address on the &ldquo;wrong&rdquo; network
           aren&apos;t lost; your wallet just isn&apos;t showing that network.

@@ -6,7 +6,7 @@ export function HowItWorks() {
       <h2 id="how">How it works</h2>
       <ol className="how">
         <li>
-          <strong>Scan.</strong> Paste the address you sent to. We check it on 7
+          <strong>Scan.</strong> Paste the address you sent to. We check it on 8
           networks. Read-only — nothing is signed or moved.
         </li>
         <li>
@@ -29,11 +29,25 @@ const FAQ: { q: string; a: React.ReactNode }[] = [
     q: "Why are my funds “stuck”?",
     a: (
       <>
-        EVM networks (Ethereum, BNB Chain, Polygon, Arbitrum, Optimism, Base,
-        Avalanche) share one address format. If you sent USDT &ldquo;on BNB
+        EVM networks (Ethereum, BNB Chain, opBNB, Polygon, Arbitrum, Optimism,
+        Base, Avalanche) share one address format. If you sent USDT &ldquo;on BNB
         Chain&rdquo; to your Ethereum address, it arrived — at the same address,
         on BNB Chain. Your wallet just isn&apos;t showing that network. The key
         you already have controls it.
+      </>
+    ),
+  },
+  {
+    q: "I withdrew BNB on opBNB instead of BNB Smart Chain.",
+    a: (
+      <>
+        A common slip on exchange withdrawal screens. opBNB is BNB&apos;s own
+        layer-2, using the same addresses — if you withdrew to your own wallet,
+        the BNB is at that address on opBNB and your key controls it. Scan the
+        address here, then move it out: to your wallet on opBNB, or to an
+        exchange deposit address that lists <em>opBNB</em> as a deposit
+        network. Moving BNB on opBNB costs a tiny fee in BNB on opBNB, which the
+        withdrawn BNB itself covers.
       </>
     ),
   },
@@ -54,7 +68,7 @@ const FAQ: { q: string; a: React.ReactNode }[] = [
     a: (
       <>
         Every network charges its fee in its own coin — ETH on Ethereum,
-        Arbitrum, Optimism and Base; BNB on BNB Chain; POL on Polygon; AVAX on
+        Arbitrum, Optimism and Base; BNB on BNB Chain and opBNB; POL on Polygon; AVAX on
         Avalanche. To move USDT on BNB Chain, the address needs a little BNB. We
         tell you the exact amount; you can withdraw it from an exchange (choose
         the right network) or send it from another wallet.

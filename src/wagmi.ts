@@ -10,6 +10,7 @@ import {
   optimism,
   base,
   avalanche,
+  opBNB,
 } from "wagmi/chains";
 import { PUBLIC_RPCS } from "@/lib/rpcs";
 
@@ -29,7 +30,7 @@ const chains = [
   arbitrum,
   optimism,
   base,
-  avalanche,
+  avalanche, opBNB,
 ] as const;
 
 function transport(chainId: number) {
@@ -49,6 +50,7 @@ export const config = createConfig({
     [optimism.id]: transport(optimism.id),
     [base.id]: transport(base.id),
     [avalanche.id]: transport(avalanche.id),
+    [opBNB.id]: transport(opBNB.id),
   },
   ssr: true,
 });

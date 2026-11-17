@@ -86,6 +86,9 @@ const RAW: Record<number, [string, string, number][]> = {
     ["0x4200000000000000000000000000000000000006", "WETH", 18],
     ["0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf", "cbBTC", 8],
   ],
+  // opBNB: native BNB only for now. Add tokens here once their addresses are
+  // verified on-chain (or cover them with TOKENS_204 / ALCHEMY_API_KEY).
+  204: [],
   // Avalanche C-Chain
   43114: [
     ["0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7", "USDT", 6],

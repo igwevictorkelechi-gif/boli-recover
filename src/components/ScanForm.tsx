@@ -101,7 +101,7 @@ export function ScanForm({
         )}
       {loading && (
         <p className="note">
-          Checking 7 networks… this can take up to 20 seconds.
+          Checking 8 networks… this can take up to 20 seconds.
         </p>
       )}
       <p className="note">
